@@ -2,10 +2,12 @@ from fastapi import FastAPI, File, UploadFile
 from pydantic import BaseModel, Field
 
 from document_service import DocumentData, DocumentService
+from embedding_service import EmbeddingService
 
 app = FastAPI()
 
-document_service = DocumentService()
+embedding_service = EmbeddingService()
+document_service = DocumentService(embedding_service)
 
 
 class SearchRequest(BaseModel):
@@ -41,3 +43,13 @@ def chunk_document(document_id: str) -> dict[str, str | int]:
 @app.post("/documents/{document_id}/search")
 def search_document(document_id: str, request: SearchRequest) -> dict:
     return document_service.search_document(document_id, request.query, request.limit)
+
+
+@app.post("/documents/{document_id}/embed")
+def embed_document(document_id: str) -> dict:
+    return document_service.embed_document(document_id)
+
+
+@app.post("/documents/{document_id}/semantic-search")
+def semantic_search_document(document_id: str, request: SearchRequest) -> dict:
+    return document_service.semantic_search(document_id, request.query, request.limit)

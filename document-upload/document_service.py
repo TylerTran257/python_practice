@@ -4,6 +4,8 @@ from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 
+from embedding_service import EmbeddingService, cosine_similarity
+
 UPLOAD_DIR = Path("uploads")
 MAX_FILE_SIZE = 1024 * 1024  # 1 MB
 ALLOWED_CONTENT_TYPES = {"text/plain"}
@@ -17,11 +19,13 @@ class DocumentData(TypedDict, total=False):
     size_bytes: int
     extracted_text: str
     chunks: list[str]
+    chunk_embeddings: list[list[float]]
 
 
 class DocumentService:
-    def __init__(self) -> None:
+    def __init__(self, embedding_service: EmbeddingService) -> None:
         self.documents: dict[str, DocumentData] = dict()
+        self.embedding_service = embedding_service
 
     async def create_document(self, file: UploadFile) -> DocumentData:
         if not file.filename:
@@ -83,7 +87,7 @@ class DocumentService:
         return document
 
     def chunk_document(self, document_id: str) -> dict[str, str | int]:
-        document = self.documents[document_id]
+        document = self.documents.get(document_id)
 
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -171,6 +175,97 @@ class DocumentService:
                         "text": chunk,
                     }
                 )
+        results.sort(key=lambda item: item["score"], reverse=True)
+        top_results = results[:limit]
+
+        return {
+            "document_id": document_id,
+            "query": query,
+            "match_count": len(top_results),
+            "results": top_results,
+        }
+
+    def embed_document(self, document_id: str) -> dict[str, str | int | list[str]]:
+        document = self.documents.get(document_id)
+
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        if document.get("status") == "embedded":
+            return {
+                "document_id": document.get("document_id") or "",
+                "status": document.get("status") or "",
+                "embedding_count": len(document.get("chunk_embeddings") or []),
+            }
+
+        if document.get("status") != "chunked":
+            raise HTTPException(
+                status_code=409,
+                detail="Document must be chunked before embedding",
+            )
+
+        chunks = document.get("chunks")
+        if chunks is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Chunks missing",
+            )
+
+        results = []
+        for chunk in chunks:
+            results.append(self.embedding_service.embed_text(chunk))
+
+        document["status"] = "embedded"
+        document["chunk_embeddings"] = results
+
+        return {
+            "document_id": document.get("document_id") or "",
+            "status": "embedded",
+            "embedding_count": len(results),
+        }
+
+    def semantic_search(
+        self, document_id: str, query: str, limit: int
+    ) -> dict[str, str | int | list[str]]:
+        document = self.documents.get(document_id)
+
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        if document.get("status") != "embedded":
+            raise HTTPException(
+                status_code=409,
+                detail="Document must be embedded before semantic searching",
+            )
+
+        if not query.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Query must not be empty",
+            )
+
+        if limit <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Limit must be greater than 0",
+            )
+
+        embedded_query = self.embedding_service.embed_text(query)
+        chunks = document.get("chunks") or []
+        embedding_chunks = document.get("chunk_embeddings") or []
+
+        results = []
+
+        for index, chunkers in enumerate(zip(chunks, embedding_chunks)):
+            score = cosine_similarity(embedded_query, chunkers[1])
+
+            results.append(
+                {
+                    "chunk_index": index,
+                    "score": score,
+                    "text": chunkers[0],
+                }
+            )
         results.sort(key=lambda item: item["score"], reverse=True)
         top_results = results[:limit]
 
