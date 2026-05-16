@@ -12,3 +12,9 @@ starlette==1.0.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 uvicorn==0.46.0
+torch==2.2.2
+numpy==1.26.4
+sentence-transformers==5.5.0
+transformers==4.41.2
+qdrant-client==1.18.0
+langchain-text-splitters==1.1.2

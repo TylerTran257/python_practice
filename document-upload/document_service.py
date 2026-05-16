@@ -1,10 +1,14 @@
 from pathlib import Path
-from typing import TypedDict
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from typing_extensions import TypedDict
 
-from embedding_service import EmbeddingService, cosine_similarity
+from embedding_service import EmbeddingService
+from VectorStoreService import VectorStoreService
+
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
 
 UPLOAD_DIR = Path("uploads")
 MAX_FILE_SIZE = 1024 * 1024  # 1 MB
@@ -23,9 +27,14 @@ class DocumentData(TypedDict, total=False):
 
 
 class DocumentService:
-    def __init__(self, embedding_service: EmbeddingService) -> None:
+    def __init__(
+        self,
+        embedding_service: EmbeddingService,
+        vector_store_service: VectorStoreService,
+    ) -> None:
         self.documents: dict[str, DocumentData] = dict()
         self.embedding_service = embedding_service
+        self.vector_store_service = vector_store_service
 
     async def create_document(self, file: UploadFile) -> DocumentData:
         if not file.filename:
@@ -112,13 +121,8 @@ class DocumentService:
                 status_code=409,
                 detail="Document must be text_extracted before chunking",
             )
-        chunk_size = 500
 
-        chunks = []
-        for start in range(0, len(extracted_text), chunk_size):
-            chunk = extracted_text[start : start + chunk_size]
-            chunks.append(chunk)
-
+        chunks = text_splitter.split_text(extracted_text)
         document["chunks"] = chunks
         document["status"] = "chunked"
 
@@ -211,33 +215,26 @@ class DocumentService:
                 detail="Chunks missing",
             )
 
-        results = []
-        for chunk in chunks:
-            results.append(self.embedding_service.embed_text(chunk))
+        chunk_embeddings = self.embedding_service.embed_texts(chunks)
+        self.vector_store_service.upsert_document_chunks(
+            document_id,
+            document.get("original_filename") or "",
+            chunks,
+            chunk_embeddings,
+        )
 
         document["status"] = "embedded"
-        document["chunk_embeddings"] = results
+        document["chunk_embeddings"] = chunk_embeddings
 
         return {
             "document_id": document.get("document_id") or "",
             "status": "embedded",
-            "embedding_count": len(results),
+            "embedding_count": len(chunk_embeddings),
         }
 
     def semantic_search(
-        self, document_id: str, query: str, limit: int
-    ) -> dict[str, str | int | list[str]]:
-        document = self.documents.get(document_id)
-
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
-
-        if document.get("status") != "embedded":
-            raise HTTPException(
-                status_code=409,
-                detail="Document must be embedded before semantic searching",
-            )
-
+        self, query: str, limit: int
+    ) -> dict[str, str | int | list[str] | list[dict[str, str | int]]]:
         if not query.strip():
             raise HTTPException(
                 status_code=400,
@@ -250,28 +247,14 @@ class DocumentService:
                 detail="Limit must be greater than 0",
             )
 
-        embedded_query = self.embedding_service.embed_text(query)
-        chunks = document.get("chunks") or []
-        embedding_chunks = document.get("chunk_embeddings") or []
-
-        results = []
-
-        for index, chunkers in enumerate(zip(chunks, embedding_chunks)):
-            score = cosine_similarity(embedded_query, chunkers[1])
-
-            results.append(
-                {
-                    "chunk_index": index,
-                    "score": score,
-                    "text": chunkers[0],
-                }
+        if not self.vector_store_service.has_indexed_chunks():
+            raise HTTPException(
+                status_code=409,
+                detail="At least one document must be embedded before semantic searching",
             )
-        results.sort(key=lambda item: item["score"], reverse=True)
-        top_results = results[:limit]
 
-        return {
-            "document_id": document_id,
-            "query": query,
-            "match_count": len(top_results),
-            "results": top_results,
-        }
+        query_embedding = self.embedding_service.embed_text(query)
+
+        results = self.vector_store_service.search(query_embedding, limit)
+
+        return {"query": query, "match_count": len(results), "results": results}
