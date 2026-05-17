@@ -19,3 +19,4 @@ transformers==4.41.2
 qdrant-client==1.18.0
 langchain-text-splitters==1.1.2
 sqlalchemy==2.0.49
+httpx==0.28.1

@@ -249,9 +249,7 @@ class DocumentService:
                 "embedding_count": len(chunk_embeddings),
             }
 
-    def semantic_search(
-        self, query: str, limit: int
-    ) -> dict[str, str | int | list[str] | list[dict[str, str | int]]]:
+    def retrieve_context(self, query: str, limit: int) -> list[dict]:
         if not query.strip():
             raise HTTPException(
                 status_code=400,
@@ -272,7 +270,12 @@ class DocumentService:
 
         query_embedding = self.embedding_service.embed_text(query)
 
-        results = self.vector_store_service.search(query_embedding, limit)
+        return self.vector_store_service.search(query_embedding, limit)
+
+    def semantic_search(
+        self, query: str, limit: int
+    ) -> dict[str, str | int | list[str] | list[dict[str, str | int]]]:
+        results = self.retrieve_context(query, limit)
 
         return {"query": query, "match_count": len(results), "results": results}
 
