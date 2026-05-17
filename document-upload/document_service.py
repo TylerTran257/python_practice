@@ -1,3 +1,5 @@
+import enum
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -5,8 +7,10 @@ from fastapi import HTTPException, UploadFile
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from typing_extensions import TypedDict
 
+from database import SessionLocal
 from embedding_service import EmbeddingService
-from VectorStoreService import VectorStoreService
+from models import Document, DocumentChunk
+from vector_store_service import VectorStoreService
 
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
 
@@ -21,7 +25,7 @@ class DocumentData(TypedDict, total=False):
     stored_filename: str
     status: str
     size_bytes: int
-    extracted_text: str
+    extracted_text: str | None
     chunks: list[str]
     chunk_embeddings: list[list[float]]
 
@@ -32,7 +36,6 @@ class DocumentService:
         embedding_service: EmbeddingService,
         vector_store_service: VectorStoreService,
     ) -> None:
-        self.documents: dict[str, DocumentData] = dict()
         self.embedding_service = embedding_service
         self.vector_store_service = vector_store_service
 
@@ -58,179 +61,193 @@ class DocumentService:
         saved_path = UPLOAD_DIR / saved_filename
         saved_path.write_bytes(contents)
 
-        document: DocumentData = {
-            "document_id": document_id,
-            "original_filename": file.filename or "unknown",
-            "stored_filename": saved_filename,
-            "status": "uploaded",
-            "size_bytes": len(contents),
-        }
-        self.documents[document_id] = document
-        return document
+        with SessionLocal() as session:
+            document = Document(
+                id=document_id,
+                original_filename=file.filename or "unknown",
+                stored_filename=saved_filename,
+                status="uploaded",
+                size_bytes=len(contents),
+                extracted_text=None,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+            session.add(document)
+            session.commit()
+            session.refresh(document)
+            return self.serialize_document(document)
 
     def get_document(self, document_id: str) -> DocumentData:
-        document = self.documents.get(document_id)
-
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
-        return self.documents[document_id]
-
-    def extract_text(self, document_id: str) -> DocumentData:
-        document = self.documents.get(document_id)
-
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
-
-        if document.get("status") == "text_extracted":
-            return document
-
-        if document.get("status") != "uploaded":
-            raise HTTPException(status_code=400, detail="Document state error")
-
-        stored_filename = document.get("stored_filename")
-        saved_path = UPLOAD_DIR / str(stored_filename)
-        content = saved_path.read_bytes()
-
-        document["status"] = "text_extracted"
-        document["extracted_text"] = content.decode("utf-8")
-        return document
-
-    def chunk_document(self, document_id: str) -> dict[str, str | int]:
-        document = self.documents.get(document_id)
-
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
-
-        if document.get("status") == "chunked":
-            chunks = document.get("chunks")
-            return {
-                "document_id": document_id,
-                "status": "chunked",
-                "chunk_count": len(chunks or []),
-            }
-
-        if document.get("status") != "text_extracted":
-            raise HTTPException(
-                status_code=409,
-                detail="Document must be text_extracted before chunking",
-            )
-
-        extracted_text = document.get("extracted_text")
-        if extracted_text is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Document must be text_extracted before chunking",
-            )
-
-        chunks = text_splitter.split_text(extracted_text)
-        document["chunks"] = chunks
-        document["status"] = "chunked"
-
-        return {
-            "document_id": document_id,
-            "status": "chunked",
-            "chunk_count": len(chunks),
-        }
+        with SessionLocal() as session:
+            document = session.get(Document, document_id)
+            if document is None:
+                raise HTTPException(status_code=404, detail="Document not found")
+            return self.serialize_document(document)
 
     def search_document(
         self, document_id: str, query: str, limit: int
     ) -> dict[str, str | int | list[str]]:
-        document = self.documents.get(document_id)
+        with SessionLocal() as session:
+            document = session.get(Document, document_id)
 
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
+            if document is None:
+                raise HTTPException(status_code=404, detail="Document not found")
 
-        if document.get("status") != "chunked":
-            raise HTTPException(
-                status_code=409,
-                detail="Document must be chunked before searching",
-            )
-
-        if not query.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="Query must not be empty",
-            )
-
-        if limit <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Limit must be greater than 0",
-            )
-
-        chunks = document.get("chunks")
-        if chunks is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Chunks missing",
-            )
-
-        normalized_query = query.lower()
-        results = []
-
-        for index, chunk in enumerate(chunks):
-            score = chunk.lower().count(normalized_query)
-
-            if score > 0:
-                results.append(
-                    {
-                        "chunk_index": index,
-                        "score": score,
-                        "text": chunk,
-                    }
+            if not query.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Query must not be empty",
                 )
-        results.sort(key=lambda item: item["score"], reverse=True)
-        top_results = results[:limit]
 
-        return {
-            "document_id": document_id,
-            "query": query,
-            "match_count": len(top_results),
-            "results": top_results,
-        }
+            if limit <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Limit must be greater than 0",
+                )
 
-    def embed_document(self, document_id: str) -> dict[str, str | int | list[str]]:
-        document = self.documents.get(document_id)
+            chunks = [chunk.text for chunk in document.chunks]
+            if chunks is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Chunks missing",
+                )
 
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
+            normalized_query = query.lower()
+            results = []
 
-        if document.get("status") == "embedded":
+            for index, chunk in enumerate(chunks):
+                score = chunk.lower().count(normalized_query)
+
+                if score > 0:
+                    results.append(
+                        {
+                            "chunk_index": index,
+                            "score": score,
+                            "text": chunk,
+                        }
+                    )
+            results.sort(key=lambda item: item["score"], reverse=True)
+            top_results = results[:limit]
+
             return {
-                "document_id": document.get("document_id") or "",
-                "status": document.get("status") or "",
-                "embedding_count": len(document.get("chunk_embeddings") or []),
+                "document_id": document_id,
+                "query": query,
+                "match_count": len(top_results),
+                "results": top_results,
             }
 
-        if document.get("status") != "chunked":
-            raise HTTPException(
-                status_code=409,
-                detail="Document must be chunked before embedding",
+    def extract_text(self, document_id: str) -> DocumentData:
+        with SessionLocal() as session:
+            document = session.get(Document, document_id)
+            if document is None:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            if document.status == "text_extracted":
+                return self.serialize_document(document)
+
+            if document.status != "uploaded":
+                raise HTTPException(status_code=400, detail="Document state error")
+
+            stored_filename = document.stored_filename
+            saved_path = UPLOAD_DIR / str(stored_filename)
+            content = saved_path.read_bytes()
+
+            document.extracted_text = content.decode("utf-8")
+            document.status = "text_extracted"
+            document.updated_at = datetime.now()
+
+            session.commit()
+            session.refresh(document)
+            return self.serialize_document(document)
+
+    def chunk_document(self, document_id: str) -> dict[str, str | int]:
+        with SessionLocal() as session:
+            document = session.get(Document, document_id)
+            if document is None:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            if document.status == "chunked":
+                chunks = document.chunks
+                return {
+                    "document_id": document_id,
+                    "status": "chunked",
+                    "chunk_count": len(chunks or []),
+                }
+
+            if document.status != "text_extracted":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Document must be text_extracted before chunking",
+                )
+
+            extracted_text = document.extracted_text
+            if extracted_text is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Document must be text_extracted before chunking",
+                )
+
+            document.chunks.clear()
+
+            chunks = text_splitter.split_text(extracted_text)
+            for index, chunk_text in enumerate(chunks):
+                document.chunks.append(
+                    DocumentChunk(
+                        chunk_index=index,
+                        text=chunk_text,
+                        created_at=datetime.now(),
+                    )
+                )
+
+            document.status = "chunked"
+            document.updated_at = datetime.now()
+            session.commit()
+
+            return {
+                "document_id": document_id,
+                "status": "chunked",
+                "chunk_count": len(chunks),
+            }
+
+    def embed_document(self, document_id: str) -> dict[str, str | int | list[str]]:
+        with SessionLocal() as session:
+            document = session.get(Document, document_id)
+
+            if document is None:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            if document.status == "embedded":
+                return {
+                    "document_id": document.id or "",
+                    "status": document.status or "",
+                    "embedding_count": len(document.chunks),
+                }
+
+            if document.status != "chunked":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Document must be chunked before embedding",
+                )
+
+            chunks = [chunk.text for chunk in document.chunks]
+            chunk_embeddings = self.embedding_service.embed_texts(chunks)
+
+            self.vector_store_service.upsert_document_chunks(
+                document_id,
+                document.original_filename,
+                chunks,
+                chunk_embeddings,
             )
 
-        chunks = document.get("chunks")
-        if chunks is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Chunks missing",
-            )
+            document.status = "embedded"
+            document.updated_at = datetime.now()
+            session.commit()
 
-        chunk_embeddings = self.embedding_service.embed_texts(chunks)
-        self.vector_store_service.upsert_document_chunks(
-            document_id,
-            document.get("original_filename") or "",
-            chunks,
-            chunk_embeddings,
-        )
-
-        document["status"] = "embedded"
-        document["chunk_embeddings"] = chunk_embeddings
-
-        return {
-            "document_id": document.get("document_id") or "",
-            "status": "embedded",
-            "embedding_count": len(chunk_embeddings),
-        }
+            return {
+                "document_id": document.id,
+                "status": "embedded",
+                "embedding_count": len(chunk_embeddings),
+            }
 
     def semantic_search(
         self, query: str, limit: int
@@ -258,3 +275,16 @@ class DocumentService:
         results = self.vector_store_service.search(query_embedding, limit)
 
         return {"query": query, "match_count": len(results), "results": results}
+
+    def serialize_document(self, document: Document) -> DocumentData:
+        chunks = [chunk.text for chunk in document.chunks]
+
+        return {
+            "document_id": document.id,
+            "original_filename": document.original_filename,
+            "stored_filename": document.stored_filename,
+            "status": document.status,
+            "size_bytes": document.size_bytes,
+            "extracted_text": document.extracted_text,
+            "chunks": chunks,
+        }

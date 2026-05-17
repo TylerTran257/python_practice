@@ -18,3 +18,4 @@ sentence-transformers==5.5.0
 transformers==4.41.2
 qdrant-client==1.18.0
 langchain-text-splitters==1.1.2
+sqlalchemy==2.0.49

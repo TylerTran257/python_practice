@@ -16,7 +16,7 @@ class VectorStoreService:
         try:
             self.client.get_collection(self.collection_name)
             return
-        except UnexpectedResponse:
+        except Exception:
             pass
 
         self.client.create_collection(
