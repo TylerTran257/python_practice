@@ -10,7 +10,7 @@ class GenerationService:
     def __init__(self) -> None:
         self.base_url = "http://127.0.0.1:8080/v1"
         self.endpoint = "/chat/completions"
-        self.timeout = 30.0
+        self.timeout = 120.0
         self.temperature = 0.2
         self.max_output_tokens = 300
         self.max_context_chars = 6000
@@ -122,7 +122,7 @@ class GenerationService:
         url = self.base_url + self.endpoint
 
         try:
-            response = httpx.post(url, json=payload, timeout=120)
+            response = httpx.post(url, json=payload, timeout=self.timeout)
             response.raise_for_status()
         except TimeoutException as exc:
             raise GenerationServiceError("Generation request timed out") from exc

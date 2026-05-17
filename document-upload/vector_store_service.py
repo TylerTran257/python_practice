@@ -10,13 +10,12 @@ class VectorStoreService:
         self.collection_name = "document_chunks"
         self.client = QdrantClient(path="./qdrant_data")
         self.ensure_collection()
-        pass
 
     def ensure_collection(self) -> None:
         try:
             self.client.get_collection(self.collection_name)
             return
-        except Exception:
+        except NotImplementedError:
             pass
 
         self.client.create_collection(

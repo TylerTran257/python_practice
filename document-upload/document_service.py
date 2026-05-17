@@ -1,4 +1,3 @@
-import enum
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -106,18 +105,11 @@ class DocumentService:
                 )
 
             chunks = [chunk.text for chunk in document.chunks]
-            if chunks is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Chunks missing",
-                )
-
             normalized_query = query.lower()
             results = []
 
             for index, chunk in enumerate(chunks):
                 score = chunk.lower().count(normalized_query)
-
                 if score > 0:
                     results.append(
                         {
@@ -126,6 +118,7 @@ class DocumentService:
                             "text": chunk,
                         }
                     )
+
             results.sort(key=lambda item: item["score"], reverse=True)
             top_results = results[:limit]
 
