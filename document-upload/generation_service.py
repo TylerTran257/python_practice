@@ -10,7 +10,7 @@ class GenerationService:
     def __init__(self) -> None:
         self.base_url = "http://127.0.0.1:8080/v1"
         self.endpoint = "/chat/completions"
-        self.timeout = 120.0
+        self.timeout = 600.0
         self.temperature = 0.2
         self.max_output_tokens = 300
         self.max_context_chars = 6000
@@ -37,11 +37,14 @@ class GenerationService:
         """return the fixed grounding rules"""
 
         return """
-            You answer questions using only the provided context.
-            If the answer is not supported by the context, say that clearly.
-            Do not invent facts.
-            Keep the answer concise.
-        """.strip()
+            Add something very explicit to the system prompt, like:
+            Return the final answer in the assistant response content only.
+            Do not output reasoning.
+            Do not output analysis.
+            Answer directly in 2-4 sentences.
+            Also good to try in the user prompt:
+            Give only the final answer. Do not include reasoning.
+            """.strip()
 
     def _build_user_message(self, question: str, sources: list[dict]) -> str:
         """build the full user-visible prompt body"""

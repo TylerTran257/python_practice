@@ -15,8 +15,8 @@ from vector_store_service import VectorStoreService
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
 
 UPLOAD_DIR = Path("uploads")
-MAX_FILE_SIZE = 1024 * 1024  # 1 MB
-ALLOWED_CONTENT_TYPES = {"text/plain"}
+MAX_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
+ALLOWED_CONTENT_TYPES = {"text/plain", "application/pdf"}
 
 
 class DocumentData(TypedDict, total=False):
