@@ -9,6 +9,7 @@ from typing_extensions import TypedDict
 from database import SessionLocal
 from embedding_service import EmbeddingService
 from models import Document, DocumentChunk
+from text_extractor import TextExtractor
 from vector_store_service import VectorStoreService
 
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
@@ -34,9 +35,11 @@ class DocumentService:
         self,
         embedding_service: EmbeddingService,
         vector_store_service: VectorStoreService,
+        text_extractor: TextExtractor,
     ) -> None:
         self.embedding_service = embedding_service
         self.vector_store_service = vector_store_service
+        self.text_extractor = text_extractor
 
     async def create_document(self, file: UploadFile) -> DocumentData:
         if not file.filename:
@@ -56,7 +59,8 @@ class DocumentService:
         UPLOAD_DIR.mkdir(exist_ok=True)
 
         document_id = str(uuid4())
-        saved_filename = f"{document_id}.txt"
+        original_suffix = Path(file.filename).suffix.lower()
+        saved_filename = f"{document_id}{original_suffix}"
         saved_path = UPLOAD_DIR / saved_filename
         saved_path.write_bytes(contents)
 
@@ -143,9 +147,8 @@ class DocumentService:
 
             stored_filename = document.stored_filename
             saved_path = UPLOAD_DIR / str(stored_filename)
-            content = saved_path.read_bytes()
 
-            document.extracted_text = content.decode("utf-8")
+            document.extracted_text = self.text_extractor.extract(saved_path)
             document.status = "text_extracted"
             document.updated_at = datetime.now()
 
