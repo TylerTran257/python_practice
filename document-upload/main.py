@@ -1,5 +1,15 @@
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import (
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.routing import APIRouter
+from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 
 from database import Base, engine
 from document_service import DocumentData, DocumentService
@@ -10,6 +20,7 @@ from text_extractor import TextExtractor
 from vector_store_service import VectorStoreService
 
 router = APIRouter()
+templates = Jinja2Templates(directory="templates")
 
 
 def create_app(document_service=None, generation_service=None) -> FastAPI:
@@ -45,6 +56,11 @@ async def upload_document_v1(
     request: Request, file: UploadFile = File(...)
 ) -> DocumentData:
     return await request.app.state.document_service.create_document(file)
+
+
+@router.get("/chat")
+def chat_page(request: Request):
+    return templates.TemplateResponse(request, "chat.html", {})
 
 
 @router.get("/{document_id}")
@@ -125,3 +141,73 @@ def ask(request: Request, askRequest: AskRequest) -> dict:
         "match_count": len(contexts),
         "sources": contexts,
     }
+
+
+@router.websocket("/ws/chat")
+async def chat_socket(websocket: WebSocket):
+    await websocket.accept()
+
+    try:
+        while True:
+            payload = await websocket.receive_json()
+
+            try:
+                ask_request = AskRequest.model_validate(payload)
+            except ValidationError:
+                await websocket.send_json(
+                    {"type": "error", "message": "Invalid chat payload"}
+                )
+                continue
+
+            await websocket.send_json(
+                {"type": "status", "message": "retrieving context"}
+            )
+
+            try:
+                contexts = websocket.app.state.document_service.retrieve_context(
+                    ask_request.query,
+                    ask_request.limit,
+                )
+            except HTTPException as exc:
+                message = (
+                    exc.detail
+                    if isinstance(exc.detail, str)
+                    else "Failed to retrieve document context"
+                )
+                await websocket.send_json({"type": "error", "message": message})
+                continue
+            except Exception:
+                await websocket.send_json(
+                    {"type": "error", "message": "Failed to retrieve document context"}
+                )
+                continue
+
+            if not contexts:
+                await websocket.send_json({"type": "done", "answer": "", "sources": []})
+                continue
+            await websocket.send_json(
+                {
+                    "type": "status",
+                    "message": "generating answer",
+                }
+            )
+
+            full_answer = ""
+            try:
+                async for (
+                    token
+                ) in websocket.app.state.generation_service.stream_answer_question(
+                    ask_request.query,
+                    contexts,
+                ):
+                    full_answer += token
+                    await websocket.send_json({"type": "token", "value": token})
+            except GenerationServiceError as exc:
+                await websocket.send_json({"type": "error", "message": str(exc)})
+                continue
+
+            await websocket.send_json(
+                {"type": "done", "answer": full_answer, "sources": contexts}
+            )
+    except WebSocketDisconnect:
+        pass

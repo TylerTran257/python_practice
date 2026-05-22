@@ -1,3 +1,6 @@
+import json
+from typing import AsyncIterator
+
 import httpx
 from httpx import NetworkError, TimeoutException
 
@@ -32,6 +35,21 @@ class GenerationService:
         answer = self._parse_response(data)
 
         return answer
+
+    async def stream_answer_question(self, question: str, sources: list[dict]):
+        if not question.strip():
+            raise GenerationServiceError("Question must not be empty")
+
+        if len(sources) == 0:
+            raise GenerationServiceError("No sources were provided for generation")
+
+        messages = [
+            {"role": "system", "content": self._build_system_message()},
+            {"role": "user", "content": self._build_user_message(question, sources)},
+        ]
+        payload = self._create_payload(messages, stream=True)
+        async for token in self._stream_chat_completion(payload):
+            yield token
 
     def _build_system_message(self) -> str:
         """return the fixed grounding rules"""
@@ -102,12 +120,14 @@ class GenerationService:
 
         return cleaned_text[:max_chars].rstrip() + "..."
 
-    def _create_payload(self, messages: list[dict[str, str]]) -> dict:
+    def _create_payload(
+        self, messages: list[dict[str, str]], stream: bool = False
+    ) -> dict:
         return {
             "messages": messages,
             "temperature": self.temperature,
             "max_tokens": self.max_output_tokens,
-            "stream": False,
+            "stream": stream,
         }
 
     def _post_chat_completion(self, payload: dict) -> dict:
@@ -158,3 +178,43 @@ class GenerationService:
             raise GenerationServiceError("Generation response was empty")
 
         return content.strip()
+
+    async def _stream_chat_completion(self, payload: dict) -> AsyncIterator[str]:
+        url = self.base_url + self.endpoint
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream("POST", url, json=payload) as response:
+                    response.raise_for_status()
+
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+
+                        if not line.startswith("data: "):
+                            continue
+
+                        data = line.removeprefix("data: ")
+                        if data == "[DONE]":
+                            break
+
+                        event = json.loads(data)
+                        choices = event.get("choices", [])
+                        if not choices:
+                            continue
+
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content")
+
+                        if content:
+                            yield content
+        except TimeoutException as exc:
+            raise GenerationServiceError("Generation request timed out") from exc
+        except NetworkError as exc:
+            raise GenerationServiceError("Generation service is unavailable") from exc
+        except httpx.HTTPStatusError as exc:
+            raise GenerationServiceError(
+                f"Generation service returned HTTP {exc.response.status_code}"
+            ) from exc
+        except ValueError as exc:
+            raise GenerationServiceError("Generation stream was malformed") from exc

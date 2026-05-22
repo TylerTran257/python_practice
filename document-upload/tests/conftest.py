@@ -51,6 +51,8 @@ class FakeGenerationService:
     def __init__(self, answer="", error=None) -> None:
         self.answer = answer
         self.error = error
+        self.streamed_tokens = []
+        self.stream_error = None
         self.calls = []
 
     def answer_question(self, question, sources):
@@ -60,6 +62,15 @@ class FakeGenerationService:
             raise self.error
 
         return self.answer
+
+    async def stream_answer_question(self, question, sources):
+        self.calls.append(("stream_answer_question", question, sources))
+
+        if self.stream_error is not None:
+            raise self.stream_error
+
+        for token in self.streamed_tokens:
+            yield token
 
 
 @pytest.fixture
