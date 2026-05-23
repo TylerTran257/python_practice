@@ -234,7 +234,6 @@ Current coverage includes:
 
 
 ## TODOs:
-3. background indexing job + status endpoint
 4. hybrid retrieval + reranking
 5. structured citation output
 6. logging + latency metrics
