@@ -4,11 +4,13 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
+from app.settings import settings
+
 
 class VectorStoreService:
     def __init__(self) -> None:
-        self.collection_name = "document_chunks"
-        self.client = QdrantClient(path="./qdrant_data")
+        self.collection_name = settings.qdrant_collection_name
+        self.client = QdrantClient(path=settings.qdrant_path)
         self.ensure_collection()
 
     def ensure_collection(self) -> None:

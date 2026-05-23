@@ -4,6 +4,8 @@ from typing import AsyncIterator
 import httpx
 from httpx import NetworkError, TimeoutException
 
+from app.settings import settings
+
 
 class GenerationServiceError(Exception):
     pass
@@ -11,13 +13,13 @@ class GenerationServiceError(Exception):
 
 class GenerationService:
     def __init__(self) -> None:
-        self.base_url = "http://127.0.0.1:8080/v1"
-        self.endpoint = "/chat/completions"
-        self.timeout = 600.0
-        self.temperature = 0.2
-        self.max_output_tokens = 300
-        self.max_context_chars = 6000
-        self.max_chars_per_chunk = 1800
+        self.base_url = settings.generation_base_url
+        self.endpoint = settings.generation_endpoint
+        self.timeout = settings.generation_timeout
+        self.temperature = settings.generation_temperature
+        self.max_output_tokens = settings.generation_max_output_tokens
+        self.max_context_chars = settings.generation_max_context_chars
+        self.max_chars_per_chunk = settings.generation_max_chars_per_chunk
 
     def answer_question(self, question: str, sources: list[dict]) -> str:
         if not question.strip():

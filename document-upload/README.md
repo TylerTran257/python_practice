@@ -26,7 +26,7 @@ pip install -r requirements.txt
 Start the app with `uvicorn`:
 
 ```bash
-uvicorn asgi:app --reload
+uvicorn asgi:app --reload --host 0.0.0.0
 ```
 
 The app will be available at:
@@ -178,3 +178,14 @@ Current coverage includes:
 - websocket happy path
 - websocket no-context path
 - websocket generation-error path
+
+
+## TODOs:
+1. settings.py with Pydantic Settings
+2. better folder architecture
+3. background indexing job + status endpoint
+4. hybrid retrieval + reranking
+5. structured citation output
+6. logging + latency metrics
+7. Docker Compose
+8. RAG eval tests

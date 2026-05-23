@@ -6,16 +6,15 @@ from fastapi import HTTPException, UploadFile
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from typing_extensions import TypedDict
 
-from database import SessionLocal
-from embedding_service import EmbeddingService
-from models import Document, DocumentChunk
-from text_extractor import TextExtractor
-from vector_store_service import VectorStoreService
+from app.db.database import SessionLocal
+from app.db.models import Document, DocumentChunk
+from app.services.embedding_service import EmbeddingService
+from app.services.text_extractor import TextExtractor
+from app.services.vector_store_service import VectorStoreService
+from app.settings import settings
 
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
 
-UPLOAD_DIR = Path("uploads")
-MAX_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
 ALLOWED_CONTENT_TYPES = {"text/plain", "application/pdf"}
 
 
@@ -47,21 +46,21 @@ class DocumentService:
 
         if file.content_type not in ALLOWED_CONTENT_TYPES:
             raise HTTPException(
-                status_code=400, detail="Only .txt files are supported right now"
+                status_code=400, detail=f"{file.content_type} is not allowed"
             )
 
         contents = await file.read()
 
-        if len(contents) > MAX_FILE_SIZE:
+        if len(contents) > settings.max_file_size:
             raise HTTPException(
                 status_code=400, detail="Document is too large. Max size is 1 MB"
             )
-        UPLOAD_DIR.mkdir(exist_ok=True)
+        settings.upload_dir.mkdir(exist_ok=True)
 
         document_id = str(uuid4())
         original_suffix = Path(file.filename).suffix.lower()
         saved_filename = f"{document_id}{original_suffix}"
-        saved_path = UPLOAD_DIR / saved_filename
+        saved_path = settings.upload_dir / saved_filename
         saved_path.write_bytes(contents)
 
         with SessionLocal() as session:
@@ -146,7 +145,7 @@ class DocumentService:
                 raise HTTPException(status_code=400, detail="Document state error")
 
             stored_filename = document.stored_filename
-            saved_path = UPLOAD_DIR / str(stored_filename)
+            saved_path = settings.upload_dir / str(stored_filename)
 
             document.extracted_text = self.text_extractor.extract(saved_path)
             document.status = "text_extracted"

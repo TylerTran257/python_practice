@@ -11,13 +11,13 @@ from fastapi.routing import APIRouter
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
-from database import Base, engine
-from document_service import DocumentData, DocumentService
-from embedding_service import EmbeddingService
-from generation_service import GenerationService, GenerationServiceError
-from schemas import AskRequest, SearchRequest
-from text_extractor import TextExtractor
-from vector_store_service import VectorStoreService
+from app.api.schemas import AskRequest, SearchRequest
+from app.db.database import Base, engine
+from app.services.document_service import DocumentData, DocumentService
+from app.services.embedding_service import EmbeddingService
+from app.services.generation_service import GenerationService, GenerationServiceError
+from app.services.text_extractor import TextExtractor
+from app.services.vector_store_service import VectorStoreService
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")

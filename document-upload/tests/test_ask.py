@@ -1,8 +1,4 @@
-import sys
-from pathlib import Path
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-from generation_service import GenerationServiceError
+from app.services.generation_service import GenerationServiceError
 
 CONTEXTS = [
     {
