@@ -7,7 +7,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from typing_extensions import TypedDict
 
 from app.db.database import SessionLocal
-from app.db.models import Document, DocumentChunk
+from app.db.models import Document, DocumentChunk, Job
 from app.services.embedding_service import EmbeddingService
 from app.services.text_extractor import TextExtractor
 from app.services.vector_store_service import VectorStoreService
@@ -27,6 +27,17 @@ class DocumentData(TypedDict, total=False):
     extracted_text: str | None
     chunks: list[str]
     chunk_embeddings: list[list[float]]
+
+
+class JobData(TypedDict):
+    job_id: str
+    job_type: str
+    document_id: str
+    status: str
+    error_message: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
 
 
 class DocumentService:
@@ -286,3 +297,95 @@ class DocumentService:
             "extracted_text": document.extracted_text,
             "chunks": chunks,
         }
+
+    def serialize_job(self, job: Job) -> JobData:
+        return {
+            "job_id": job.id,
+            "job_type": job.job_type,
+            "document_id": job.document_id,
+            "status": job.status,
+            "error_message": job.error_message,
+            "created_at": job.created_at.isoformat(),
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        }
+
+    def create_job(self, document_id: str) -> JobData:
+        with SessionLocal() as session:
+            document = session.get(Document, document_id)
+            if document is None:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            job = Job(
+                id=str(uuid4()),
+                job_type="document_index",
+                document_id=document_id,
+                status="queued",
+                error_message=None,
+                created_at=datetime.now(),
+                started_at=None,
+                finished_at=None,
+            )
+            session.add(job)
+            session.commit()
+            session.refresh(job)
+            return self.serialize_job(job)
+
+    def get_job(self, job_id: str) -> JobData:
+        with SessionLocal() as session:
+            job = session.get(Job, job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Job not found")
+
+            return self.serialize_job(job)
+
+    def mark_job_running(self, job_id: str) -> JobData:
+        with SessionLocal() as session:
+            job = session.get(Job, job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Job not found")
+
+            job.status = "running"
+            job.started_at = datetime.now()
+
+            session.commit()
+            session.refresh(job)
+            return self.serialize_job(job)
+
+    def mark_job_completed(self, job_id: str) -> JobData:
+        with SessionLocal() as session:
+            job = session.get(Job, job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Job not found")
+
+            job.status = "completed"
+            job.error_message = None
+            job.finished_at = datetime.now()
+
+            session.commit()
+            session.refresh(job)
+            return self.serialize_job(job)
+
+    def mark_job_failed(self, job_id: str, message: str) -> JobData:
+        with SessionLocal() as session:
+            job = session.get(Job, job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Job not found")
+
+            job.status = "failed"
+            job.error_message = message
+            job.finished_at = datetime.now() if not job.finished_at else job.finished_at
+
+            session.commit()
+            session.refresh(job)
+            return self.serialize_job(job)
+
+    def run_indexing_pipeline(self, document_id: str, job_id: str) -> None:
+        try:
+            self.mark_job_running(job_id)
+            self.extract_text(document_id)
+            self.chunk_document(document_id)
+            self.embed_document(document_id)
+            self.mark_job_completed(job_id)
+        except Exception as exc:
+            self.mark_job_failed(job_id, str(exc))

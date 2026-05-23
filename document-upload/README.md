@@ -58,13 +58,16 @@ Current `GenerationService` target:
 5. Run semantic search across all indexed documents
 6. Ask a question against the indexed corpus
 7. Stream an answer in the browser over WebSocket
+8. Optionally upload and index in the background with job polling
 
-There are two upload flows available:
+There are three upload flows available:
 
 - `POST /upload_v1`
   - upload only
 - `POST /upload_v2`
   - upload, extract, chunk, and embed in a single request
+- `POST /upload_async`
+  - upload a document, create a background indexing job, and return a queued job response immediately
 
 Supported upload types right now:
 
@@ -80,6 +83,8 @@ Supported upload types right now:
   - upload a document only
 - `POST /upload_v2`
   - upload and run the full indexing pipeline
+- `POST /upload_async`
+  - upload and enqueue the indexing pipeline as a background job
 - `GET /{document_id}`
   - fetch persisted document metadata and chunks
 - `POST /{document_id}/extract`
@@ -92,8 +97,42 @@ Supported upload types right now:
   - corpus-wide semantic search across all embedded documents
 - `POST /ask`
   - retrieve relevant chunks and generate one non-streaming answer from the indexed corpus
+- `GET /jobs/{job_id}`
+  - fetch the current status of a background indexing job
 - `WS /ws/chat`
   - retrieve relevant chunks and stream answer tokens to the chat UI
+
+## Background Job Flow
+
+`POST /upload_async` stores the uploaded document, creates a job with status `queued`, and schedules the indexing pipeline in a FastAPI background task.
+
+Initial response example:
+
+```json
+{
+  "job_id": "job-123",
+  "job_type": "document_index",
+  "document_id": "doc-123",
+  "status": "queued",
+  "error_message": null,
+  "created_at": "2026-05-23T12:00:00",
+  "started_at": null,
+  "finished_at": null
+}
+```
+
+Poll the job with:
+
+```text
+GET /jobs/{job_id}
+```
+
+Current job statuses:
+
+- `queued`
+- `running`
+- `completed`
+- `failed`
 
 ## Chat Flow
 
@@ -153,6 +192,19 @@ curl -X POST "http://127.0.0.1:8000/ask" \
   -d '{"query":"what is retrieval augmented generation","limit":3}'
 ```
 
+### Upload and index in the background
+
+```bash
+curl -X POST "http://127.0.0.1:8000/upload_async" \
+  -F "file=@tests/fixtures/python_rag_intro.txt;type=text/plain"
+```
+
+Then poll the returned `job_id`:
+
+```bash
+curl "http://127.0.0.1:8000/jobs/<job_id>"
+```
+
 ### Open the chat UI
 
 Visit:
@@ -174,6 +226,7 @@ pytest
 Current coverage includes:
 
 - upload pipeline behavior
+- async upload job creation and polling behavior
 - `/ask` request/response behavior
 - websocket happy path
 - websocket no-context path
@@ -181,11 +234,10 @@ Current coverage includes:
 
 
 ## TODOs:
-1. settings.py with Pydantic Settings
-2. better folder architecture
 3. background indexing job + status endpoint
 4. hybrid retrieval + reranking
 5. structured citation output
 6. logging + latency metrics
 7. Docker Compose
 8. RAG eval tests
+9. breakdown main.py more (ask.py, health.py...)

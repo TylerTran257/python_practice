@@ -13,6 +13,7 @@ class FakeDocumentService:
     def __init__(self) -> None:
         self.calls = []
         self.contexts = []
+        self.jobs = {}
 
     async def create_document(self, file):
         self.calls.append(("create_document", file.filename))
@@ -45,6 +46,57 @@ class FakeDocumentService:
     def retrieve_context(self, query, limit):
         self.calls.append(("retrieve_context", query, limit))
         return self.contexts
+
+    def create_job(self, document_id: str):
+        self.calls.append(("create_job", document_id))
+        fake_job = {
+            "job_id": "job-123",
+            "job_type": "document_index",
+            "document_id": document_id,
+            "status": "queued",
+            "error_message": None,
+            "created_at": "2026-05-23T12:00:00",
+            "started_at": None,
+            "finished_at": None,
+        }
+        self.jobs[fake_job["job_id"]] = fake_job
+        return fake_job
+
+    def get_job(self, job_id: str):
+        self.calls.append(("get_job", job_id))
+        return self.jobs[job_id]
+
+    def mark_job_running(self, job_id: str):
+        self.calls.append(("mark_job_running", job_id))
+        fake_job = self.jobs[job_id]
+        fake_job["status"] = "running"
+        return fake_job
+
+    def mark_job_completed(self, job_id: str):
+        self.calls.append(("mark_job_completed", job_id))
+        fake_job = self.jobs[job_id]
+        fake_job["status"] = "completed"
+        fake_job["finished_at"] = "2026-05-25T12:00:00"
+        fake_job["error_message"] = ""
+        return fake_job
+
+    def mark_job_failed(self, job_id: str, message: str):
+        self.calls.append(("mark_job_failed", job_id, message))
+        fake_job = self.jobs[job_id]
+        fake_job["status"] = "failed"
+        fake_job["finished_at"] = "2026-05-25T12:00:00"
+        fake_job["error_message"] = message
+        return fake_job
+
+    def run_indexing_pipeline(self, document_id: str, job_id: str):
+        self.calls.append(("run_indexing_pipeline", document_id, job_id))
+        self.mark_job_running(job_id)
+        self.extract_text(document_id)
+        self.chunk_document(document_id)
+        self.embed_document(document_id)
+        self.mark_job_completed(job_id)
+
+        return self.jobs[job_id]
 
 
 class FakeGenerationService:
