@@ -9,6 +9,7 @@ from typing_extensions import TypedDict
 from app.db.database import SessionLocal
 from app.db.models import Document, DocumentChunk, Job
 from app.services.embedding_service import EmbeddingService
+from app.services.lexical_search_service import LexicalSearchService
 from app.services.text_extractor import TextExtractor
 from app.services.vector_store_service import VectorStoreService
 from app.settings import settings
@@ -46,10 +47,63 @@ class DocumentService:
         embedding_service: EmbeddingService,
         vector_store_service: VectorStoreService,
         text_extractor: TextExtractor,
+        lexical_search_service: LexicalSearchService,
     ) -> None:
         self.embedding_service = embedding_service
         self.vector_store_service = vector_store_service
         self.text_extractor = text_extractor
+        self.lexical_search_service = lexical_search_service
+
+    def _validate_query(self, query: str, limit: int) -> None:
+        if not query.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Query must not be empty",
+            )
+
+        if limit <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Limit must be greater than 0",
+            )
+
+    def _fuse_rankings_rrf(
+        self, dense_results: list[dict], lexical_results: list[dict], limit: int
+    ) -> list[dict]:
+        if limit <= 0:
+            return []
+
+        fused_by_key: dict[tuple[str, int], dict] = {}
+        rrf_k = settings.fusion_rrf_k
+
+        def add_results(results: list[dict]) -> None:
+            for rank, result in enumerate(results, start=1):
+                key = (result["document_id"], result["chunk_index"])
+                rrf_score = 1 / (rrf_k + rank)
+                print(key, rrf_score)
+
+                existing = fused_by_key.get(key)
+                if existing is None:
+                    fused_by_key[key] = {
+                        "document_id": result["document_id"],
+                        "original_filename": result["original_filename"],
+                        "chunk_index": result["chunk_index"],
+                        "text": result["text"],
+                        "score": rrf_score,
+                    }
+                    continue
+
+                existing["score"] += rrf_score
+
+        add_results(dense_results)
+        add_results(lexical_results)
+
+        fused_results = list(fused_by_key.values())
+        fused_results.sort(
+            key=lambda item: (-item["score"], item["document_id"], item["chunk_index"])
+        )
+
+        return fused_results[:limit]
 
     async def create_document(self, file: UploadFile) -> DocumentData:
         if not file.filename:
@@ -209,6 +263,10 @@ class DocumentService:
             document.updated_at = datetime.now()
             session.commit()
 
+            self.lexical_search_service.index_document_chunks(
+                document_id, document.original_filename, document.chunks
+            )
+
             return {
                 "document_id": document_id,
                 "status": "chunked",
@@ -256,17 +314,10 @@ class DocumentService:
             }
 
     def retrieve_context(self, query: str, limit: int) -> list[dict]:
-        if not query.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="Query must not be empty",
-            )
+        return self.retrieve_context_dense(query, limit)
 
-        if limit <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Limit must be greater than 0",
-            )
+    def retrieve_context_dense(self, query: str, limit: int) -> list[dict]:
+        self._validate_query(query, limit)
 
         if not self.vector_store_service.has_indexed_chunks():
             raise HTTPException(
@@ -278,10 +329,41 @@ class DocumentService:
 
         return self.vector_store_service.search(query_embedding, limit)
 
+    def retrieve_context_lexical(self, query: str, limit: int) -> list[dict]:
+        self._validate_query(query, limit)
+
+        return self.lexical_search_service.search(query, limit)
+
+    def retrieve_context_hybrid(self, query: str, limit: int) -> list[dict]:
+        self._validate_query(query, limit)
+
+        try:
+            dense_results = self.retrieve_context_dense(
+                query, settings.dense_retrieval_limit
+            )
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                dense_results = []
+            else:
+                raise
+
+        lexical_results = self.retrieve_context_lexical(
+            query, settings.lexical_retrieval_limit
+        )
+
+        return self._fuse_rankings_rrf(dense_results, lexical_results, limit)
+
     def semantic_search(
         self, query: str, limit: int
     ) -> dict[str, str | int | list[str] | list[dict[str, str | int]]]:
         results = self.retrieve_context(query, limit)
+
+        return {"query": query, "match_count": len(results), "results": results}
+
+    def hybrid_search(
+        self, query: str, limit: int
+    ) -> dict[str, str | int | list[str] | list[dict[str, str | int]]]:
+        results = self.retrieve_context_hybrid(query, limit)
 
         return {"query": query, "match_count": len(results), "results": results}
 
