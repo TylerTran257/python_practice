@@ -27,5 +27,9 @@ class Settings(BaseSettings):
     generation_max_context_chars: int = 6000
     generation_max_chars_per_chunk: int = 1800
 
+    dense_retrieval_limit: int = 15
+    lexical_retrieval_limit: int = 15
+    fusion_rrf_k: int = 60
+
 
 settings = Settings()

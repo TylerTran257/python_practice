@@ -17,6 +17,7 @@ from app.db.database import Base, engine
 from app.services.document_service import DocumentData, DocumentService, JobData
 from app.services.embedding_service import EmbeddingService
 from app.services.generation_service import GenerationService, GenerationServiceError
+from app.services.lexical_search_service import LexicalSearchService
 from app.services.text_extractor import TextExtractor
 from app.services.vector_store_service import VectorStoreService
 
@@ -33,8 +34,12 @@ def create_app(document_service=None, generation_service=None) -> FastAPI:
         embedding_service = EmbeddingService()
         vector_store_service = VectorStoreService()
         text_extractor = TextExtractor()
+        lexical_search_service = LexicalSearchService()
         resolved_document_service = DocumentService(
-            embedding_service, vector_store_service, text_extractor
+            embedding_service,
+            vector_store_service,
+            text_extractor,
+            lexical_search_service,
         )
 
     resolved_generation_service = generation_service
@@ -112,6 +117,13 @@ async def upload_document_v2(
 @router.post("/semantic-search")
 def semantic_search_document(request: Request, searchRequest: SearchRequest) -> dict:
     return request.app.state.document_service.semantic_search(
+        searchRequest.query, searchRequest.limit
+    )
+
+
+@router.post("/hybrid-search")
+def hybrid_search_document(request: Request, searchRequest: SearchRequest) -> dict:
+    return request.app.state.document_service.hybrid_search(
         searchRequest.query, searchRequest.limit
     )
 

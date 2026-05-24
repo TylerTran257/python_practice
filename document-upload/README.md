@@ -234,9 +234,9 @@ Current coverage includes:
 
 
 ## TODOs:
-4. hybrid retrieval + reranking
-5. structured citation output
-6. logging + latency metrics
-7. Docker Compose
-8. RAG eval tests
-9. breakdown main.py more (ask.py, health.py...)
+4. hybrid retrieval + reranking (1 session)
+5. structured citation output (1/2 session)
+6. logging + latency metrics (1/2 session)
+7. Docker Compose (1/2 session)
+8. RAG eval tests (1 session)
+9. breakdown main.py more (ask.py, health.py...) (1/2 session)
