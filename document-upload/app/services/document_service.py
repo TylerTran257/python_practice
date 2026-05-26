@@ -392,6 +392,22 @@ class DocumentService:
             "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         }
 
+    def serialize_citations(self, contexts: list[dict]) -> list[dict]:
+        citations = []
+        for id, context in enumerate(contexts, start=1):
+            citations.append(
+                {
+                    "id": id,
+                    "document_id": context["document_id"],
+                    "original_filename": context["original_filename"],
+                    "chunk_index": context["chunk_index"],
+                    "score": context["score"],
+                    "text": context["text"],
+                }
+            )
+
+        return citations
+
     def create_job(self, document_id: str) -> JobData:
         with SessionLocal() as session:
             document = session.get(Document, document_id)

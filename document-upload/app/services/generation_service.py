@@ -57,13 +57,14 @@ class GenerationService:
         """return the fixed grounding rules"""
 
         return """
-            Add something very explicit to the system prompt, like:
             Return the final answer in the assistant response content only.
+            Cite factual claims with inline citation using source number in square brackets, like [1] or [2].
+            Use only the provided source numbers.
+            Do not invent citations.
+            If a claim is supported by multiple sources, you may cite multiple sources like [1][2]
             Do not output reasoning.
             Do not output analysis.
-            Answer directly in 2-4 sentences.
-            Also good to try in the user prompt:
-            Give only the final answer. Do not include reasoning.
+            Return only final answer in 2-4 sentences.
             """.strip()
 
     def _build_user_message(self, question: str, sources: list[dict]) -> str:

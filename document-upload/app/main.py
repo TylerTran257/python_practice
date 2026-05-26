@@ -140,7 +140,6 @@ def ask(request: Request, askRequest: AskRequest) -> dict:
             "match_count": 0,
             "sources": [],
         }
-
     try:
         answer = request.app.state.generation_service.answer_question(
             askRequest.query, contexts
@@ -148,11 +147,14 @@ def ask(request: Request, askRequest: AskRequest) -> dict:
     except GenerationServiceError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
+    citations = request.app.state.document_service.serialize_citations(contexts)
+
     return {
         "query": askRequest.query,
         "answer": answer if len(answer) != 0 else "",
         "match_count": len(contexts),
         "sources": contexts,
+        "citations": citations,
     }
 
 
@@ -219,8 +221,16 @@ async def chat_socket(websocket: WebSocket):
                 await websocket.send_json({"type": "error", "message": str(exc)})
                 continue
 
+            citations = websocket.app.state.document_service.serialize_citations(
+                contexts
+            )
             await websocket.send_json(
-                {"type": "done", "answer": full_answer, "sources": contexts}
+                {
+                    "type": "done",
+                    "answer": full_answer,
+                    "sources": contexts,
+                    "citations": citations,
+                }
             )
     except WebSocketDisconnect:
         pass
