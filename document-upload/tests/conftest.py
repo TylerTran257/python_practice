@@ -47,6 +47,19 @@ class FakeDocumentService:
         self.calls.append(("retrieve_context", query, limit))
         return self.contexts
 
+    def serialize_citations(self, contexts):
+        return [
+            {
+                "id": index,
+                "document_id": context["document_id"],
+                "original_filename": context["original_filename"],
+                "chunk_index": context["chunk_index"],
+                "score": context["score"],
+                "text": context["text"],
+            }
+            for index, context in enumerate(contexts, start=1)
+        ]
+
     def create_job(self, document_id: str):
         self.calls.append(("create_job", document_id))
         fake_job = {

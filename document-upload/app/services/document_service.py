@@ -1,5 +1,7 @@
+import logging
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
@@ -13,6 +15,8 @@ from app.services.lexical_search_service import LexicalSearchService
 from app.services.text_extractor import TextExtractor
 from app.services.vector_store_service import VectorStoreService
 from app.settings import settings
+
+logger = logging.getLogger(__name__)
 
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
 
@@ -80,7 +84,6 @@ class DocumentService:
             for rank, result in enumerate(results, start=1):
                 key = (result["document_id"], result["chunk_index"])
                 rrf_score = 1 / (rrf_k + rank)
-                print(key, rrf_score)
 
                 existing = fused_by_key.get(key)
                 if existing is None:
@@ -106,6 +109,7 @@ class DocumentService:
         return fused_results[:limit]
 
     async def create_document(self, file: UploadFile) -> DocumentData:
+        started_at = perf_counter()
         if not file.filename:
             raise HTTPException(status_code=400, detail="Documentname is required")
 
@@ -142,7 +146,16 @@ class DocumentService:
             session.add(document)
             session.commit()
             session.refresh(document)
-            return self.serialize_document(document)
+            result = self.serialize_document(document)
+
+        logger.info(
+            "event=document_created document_id=%s filename=%s size_bytes=%s duration_ms=%s",
+            document_id,
+            file.filename or "unknown",
+            len(contents),
+            round((perf_counter() - started_at) * 1000, 2),
+        )
+        return result
 
     def get_document(self, document_id: str) -> DocumentData:
         with SessionLocal() as session:
@@ -198,6 +211,7 @@ class DocumentService:
             }
 
     def extract_text(self, document_id: str) -> DocumentData:
+        started_at = perf_counter()
         with SessionLocal() as session:
             document = session.get(Document, document_id)
             if document is None:
@@ -218,9 +232,18 @@ class DocumentService:
 
             session.commit()
             session.refresh(document)
-            return self.serialize_document(document)
+            result = self.serialize_document(document)
+
+        logger.info(
+            "event=text_extracted document_id=%s text_length=%s duration_ms=%s",
+            document_id,
+            len(result.get("extracted_text") or ""),
+            round((perf_counter() - started_at) * 1000, 2),
+        )
+        return result
 
     def chunk_document(self, document_id: str) -> dict[str, str | int]:
+        started_at = perf_counter()
         with SessionLocal() as session:
             document = session.get(Document, document_id)
             if document is None:
@@ -267,13 +290,22 @@ class DocumentService:
                 document_id, document.original_filename, document.chunks
             )
 
-            return {
+            result = {
                 "document_id": document_id,
                 "status": "chunked",
                 "chunk_count": len(chunks),
             }
 
+        logger.info(
+            "event=document_chunked document_id=%s chunk_count=%s duration_ms=%s",
+            document_id,
+            result["chunk_count"],
+            round((perf_counter() - started_at) * 1000, 2),
+        )
+        return result
+
     def embed_document(self, document_id: str) -> dict[str, str | int | list[str]]:
+        started_at = perf_counter()
         with SessionLocal() as session:
             document = session.get(Document, document_id)
 
@@ -307,16 +339,25 @@ class DocumentService:
             document.updated_at = datetime.now()
             session.commit()
 
-            return {
+            result = {
                 "document_id": document.id,
                 "status": "embedded",
                 "embedding_count": len(chunk_embeddings),
             }
 
+        logger.info(
+            "event=document_embedded document_id=%s embedding_count=%s duration_ms=%s",
+            document_id,
+            result["embedding_count"],
+            round((perf_counter() - started_at) * 1000, 2),
+        )
+        return result
+
     def retrieve_context(self, query: str, limit: int) -> list[dict]:
         return self.retrieve_context_dense(query, limit)
 
     def retrieve_context_dense(self, query: str, limit: int) -> list[dict]:
+        started_at = perf_counter()
         self._validate_query(query, limit)
 
         if not self.vector_store_service.has_indexed_chunks():
@@ -327,7 +368,15 @@ class DocumentService:
 
         query_embedding = self.embedding_service.embed_text(query)
 
-        return self.vector_store_service.search(query_embedding, limit)
+        results = self.vector_store_service.search(query_embedding, limit)
+        logger.info(
+            "event=retrieval_completed mode=dense query_length=%s requested_limit=%s result_count=%s duration_ms=%s",
+            len(query),
+            limit,
+            len(results),
+            round((perf_counter() - started_at) * 1000, 2),
+        )
+        return results
 
     def retrieve_context_lexical(self, query: str, limit: int) -> list[dict]:
         self._validate_query(query, limit)
@@ -335,6 +384,7 @@ class DocumentService:
         return self.lexical_search_service.search(query, limit)
 
     def retrieve_context_hybrid(self, query: str, limit: int) -> list[dict]:
+        started_at = perf_counter()
         self._validate_query(query, limit)
 
         try:
@@ -351,7 +401,17 @@ class DocumentService:
             query, settings.lexical_retrieval_limit
         )
 
-        return self._fuse_rankings_rrf(dense_results, lexical_results, limit)
+        results = self._fuse_rankings_rrf(dense_results, lexical_results, limit)
+        logger.info(
+            "event=retrieval_completed mode=hybrid query_length=%s requested_limit=%s dense_candidate_count=%s lexical_candidate_count=%s result_count=%s duration_ms=%s",
+            len(query),
+            limit,
+            len(dense_results),
+            len(lexical_results),
+            len(results),
+            round((perf_counter() - started_at) * 1000, 2),
+        )
+        return results
 
     def semantic_search(
         self, query: str, limit: int
@@ -479,11 +539,29 @@ class DocumentService:
             return self.serialize_job(job)
 
     def run_indexing_pipeline(self, document_id: str, job_id: str) -> None:
+        started_at = perf_counter()
         try:
+            logger.info(
+                "event=index_job_started job_id=%s document_id=%s",
+                job_id,
+                document_id,
+            )
             self.mark_job_running(job_id)
             self.extract_text(document_id)
             self.chunk_document(document_id)
             self.embed_document(document_id)
             self.mark_job_completed(job_id)
+            logger.info(
+                "event=index_job_completed job_id=%s document_id=%s duration_ms=%s",
+                job_id,
+                document_id,
+                round((perf_counter() - started_at) * 1000, 2),
+            )
         except Exception as exc:
             self.mark_job_failed(job_id, str(exc))
+            logger.exception(
+                "event=index_job_failed job_id=%s document_id=%s duration_ms=%s",
+                job_id,
+                document_id,
+                round((perf_counter() - started_at) * 1000, 2),
+            )

@@ -1,5 +1,16 @@
 from app.services.generation_service import GenerationServiceError
 
+CITATIONS = [
+    {
+        "id": 1,
+        "document_id": "doc-1",
+        "original_filename": "python_rag_intro.txt",
+        "chunk_index": 0,
+        "score": 0.91,
+        "text": "Retrieval augmented generation combines retrieval with generation.",
+    }
+]
+
 CONTEXTS = [
     {
         "document_id": "doc-1",
@@ -31,6 +42,7 @@ def test_ask_returns_answer_and_sources(
         "answer": "Retrieval augmented generation combines retrieval with generation.",
         "match_count": 1,
         "sources": CONTEXTS,
+        "citations": CITATIONS,
     }
 
 
@@ -68,5 +80,6 @@ def test_ask_returns_empty_answer_when_no_context_found(
         "answer": "",
         "match_count": 0,
         "sources": [],
+        "citations": [],
     }
     assert fake_generation_service.calls == []

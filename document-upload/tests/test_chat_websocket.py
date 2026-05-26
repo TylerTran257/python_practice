@@ -1,5 +1,16 @@
 from app.services.generation_service import GenerationServiceError
 
+CITATIONS = [
+    {
+        "id": 1,
+        "document_id": "doc-1",
+        "original_filename": "python_rag_intro.txt",
+        "chunk_index": 0,
+        "score": 0.91,
+        "text": "Retrieval augmented generation combines retrieval with generation.",
+    }
+]
+
 CONTEXTS = [
     {
         "document_id": "doc-1",
@@ -55,6 +66,7 @@ def test_chat_websocket_streams_answer_and_sources(
         "type": "done",
         "answer": "Retrieval augmented generation combines retrieval with generation.",
         "sources": CONTEXTS,
+        "citations": CITATIONS,
     }
 
     assert fake_generation_service.calls == [
@@ -84,6 +96,7 @@ def test_chat_websocket_returns_done_when_no_context_found(
         "type": "done",
         "answer": "",
         "sources": [],
+        "citations": [],
     }
 
     assert fake_document_service.calls == [

@@ -1,7 +1,12 @@
+import logging
+from time import perf_counter
+
 from sqlalchemy import text
 
 from app.db.database import SessionLocal
 from app.db.models import DocumentChunk
+
+logger = logging.getLogger(__name__)
 
 FTS_TABLE_NAME = "document_chunks_fts"
 
@@ -43,9 +48,15 @@ class LexicalSearchService:
     def index_document_chunks(
         self, document_id: str, original_filename: str, chunks: list[DocumentChunk]
     ) -> None:
+        started_at = perf_counter()
         self.delete_document_chunks(document_id)
 
         if len(chunks) == 0:
+            logger.info(
+                "event=lexical_index_completed document_id=%s chunk_count=0 duration_ms=%s",
+                document_id,
+                round((perf_counter() - started_at) * 1000, 2),
+            )
             return
 
         rows = [
@@ -81,9 +92,23 @@ class LexicalSearchService:
             )
             session.commit()
 
+        logger.info(
+            "event=lexical_index_completed document_id=%s chunk_count=%s duration_ms=%s",
+            document_id,
+            len(chunks),
+            round((perf_counter() - started_at) * 1000, 2),
+        )
+
     def search(self, query: str, limit: int) -> list[dict]:
+        started_at = perf_counter()
         normalized_query = self._normalize_query(query)
         if not normalized_query:
+            logger.info(
+                "event=retrieval_completed mode=lexical query_length=%s requested_limit=%s result_count=0 duration_ms=%s",
+                len(query),
+                limit,
+                round((perf_counter() - started_at) * 1000, 2),
+            )
             return []
 
         with SessionLocal() as session:
@@ -105,7 +130,7 @@ class LexicalSearchService:
 
             rows = result.mappings().all()
 
-        return [
+        results = [
             {
                 "document_id": row["document_id"],
                 "original_filename": row["original_filename"],
@@ -115,3 +140,12 @@ class LexicalSearchService:
             }
             for row in rows
         ]
+
+        logger.info(
+            "event=retrieval_completed mode=lexical query_length=%s requested_limit=%s result_count=%s duration_ms=%s",
+            len(query),
+            limit,
+            len(results),
+            round((perf_counter() - started_at) * 1000, 2),
+        )
+        return results

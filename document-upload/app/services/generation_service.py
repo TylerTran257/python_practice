@@ -1,10 +1,14 @@
 import json
+import logging
+from time import perf_counter
 from typing import AsyncIterator
 
 import httpx
 from httpx import NetworkError, TimeoutException
 
 from app.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class GenerationServiceError(Exception):
@@ -22,6 +26,7 @@ class GenerationService:
         self.max_chars_per_chunk = settings.generation_max_chars_per_chunk
 
     def answer_question(self, question: str, sources: list[dict]) -> str:
+        started_at = perf_counter()
         if not question.strip():
             raise GenerationServiceError("Question must not be empty")
 
@@ -36,9 +41,16 @@ class GenerationService:
         data = self._post_chat_completion(payload)
         answer = self._parse_response(data)
 
+        logger.info(
+            "event=answer_question_completed source_count=%s answer_length=%s duration_ms=%s",
+            len(sources),
+            len(answer),
+            round((perf_counter() - started_at) * 1000, 2),
+        )
         return answer
 
     async def stream_answer_question(self, question: str, sources: list[dict]):
+        started_at = perf_counter()
         if not question.strip():
             raise GenerationServiceError("Question must not be empty")
 
@@ -52,6 +64,12 @@ class GenerationService:
         payload = self._create_payload(messages, stream=True)
         async for token in self._stream_chat_completion(payload):
             yield token
+
+        logger.info(
+            "event=stream_answer_question_completed source_count=%s duration_ms=%s",
+            len(sources),
+            round((perf_counter() - started_at) * 1000, 2),
+        )
 
     def _build_system_message(self) -> str:
         """return the fixed grounding rules"""
@@ -144,27 +162,49 @@ class GenerationService:
             print(type(exc), repr(exc))
             raise
         """
-
+        started_at = perf_counter()
         url = self.base_url + self.endpoint
 
         try:
             response = httpx.post(url, json=payload, timeout=self.timeout)
             response.raise_for_status()
         except TimeoutException as exc:
+            logger.error(
+                "event=post_chat_completion_failed error_message=%s",
+                "Generation request timed out",
+            )
             raise GenerationServiceError("Generation request timed out") from exc
         except NetworkError as exc:
+            logger.error(
+                "event=post_chat_completion_failed error_message=%s",
+                "Generation service is unavailable",
+            )
             raise GenerationServiceError("Generation service is unavailable") from exc
         except httpx.HTTPStatusError as exc:
+            logger.error(
+                "event=post_chat_completion_failed error_message=%s",
+                f"Generation service returned HTTP {exc.response.status_code}",
+            )
             raise GenerationServiceError(
                 f"Generation service returned HTTP {exc.response.status_code}"
             ) from exc
 
         try:
-            return response.json()
+            response_json = response.json()
         except ValueError as exc:
+            logger.error(
+                "event=post_chat_completion_failed error_message=%s",
+                "Generation service returned invalid JSON",
+            )
             raise GenerationServiceError(
                 "Generation service returned invalid JSON"
             ) from exc
+
+        logger.info(
+            "event=post_chat_completion_completed duration_ms=%s",
+            round((perf_counter() - started_at) * 1000, 2),
+        )
+        return response_json
 
     def _parse_response(self, response_json: dict) -> str:
         choices = response_json.get("choices")
@@ -183,6 +223,8 @@ class GenerationService:
         return content.strip()
 
     async def _stream_chat_completion(self, payload: dict) -> AsyncIterator[str]:
+        started_at = perf_counter()
+        first_token_logged = False
         url = self.base_url + self.endpoint
 
         try:
@@ -210,14 +252,40 @@ class GenerationService:
                         content = delta.get("content")
 
                         if content:
+                            if not first_token_logged:
+                                logger.info(
+                                    "event=time_to_first_token duration_ms=%s",
+                                    round((perf_counter() - started_at) * 1000, 2),
+                                )
+                                first_token_logged = True
                             yield content
         except TimeoutException as exc:
+            logger.error(
+                "event=stream_chat_completion_failed error_message=%s",
+                "Generation request timed out",
+            )
             raise GenerationServiceError("Generation request timed out") from exc
         except NetworkError as exc:
+            logger.error(
+                "event=stream_chat_completion_failed error_message=%s",
+                "Generation service is unavailable",
+            )
             raise GenerationServiceError("Generation service is unavailable") from exc
         except httpx.HTTPStatusError as exc:
+            logger.error(
+                "event=stream_chat_completion_failed error_message=%s",
+                f"Generation service returned HTTP {exc.response.status_code}",
+            )
             raise GenerationServiceError(
                 f"Generation service returned HTTP {exc.response.status_code}"
             ) from exc
         except ValueError as exc:
+            logger.error(
+                "event=stream_chat_completion_failed error_message=%s",
+                "Generation stream was malformed",
+            )
             raise GenerationServiceError("Generation stream was malformed") from exc
+        logger.info(
+            "event=stream_chat_completion_completed duration_ms=%s",
+            round((perf_counter() - started_at) * 1000, 2),
+        )
