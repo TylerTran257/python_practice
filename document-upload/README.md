@@ -2,18 +2,21 @@
 
 Small FastAPI project for learning a local-first RAG pipeline with:
 
-- document upload
-- text extraction from `.txt` and `.pdf` files
+- document upload for `.txt` and `.pdf`
+- text extraction
 - chunking with `langchain-text-splitters`
 - embeddings with `sentence-transformers`
-- vector search with local Qdrant
-- answer generation with a local `llama-server` model endpoint
+- local vector storage with Qdrant-on-disk
+- dense, lexical, and hybrid retrieval
+- answer generation through a local OpenAI-compatible `llama-server`
 - a small mobile-first chat UI backed by WebSocket streaming
+- background indexing jobs with polling
 
 ## Requirements
 
 - Python 3.11+
 - virtual environment recommended
+- a local OpenAI-compatible generation endpoint for `/ask` and `WS /ws/chat`
 
 ## Install
 
@@ -21,58 +24,64 @@ Small FastAPI project for learning a local-first RAG pipeline with:
 pip install -r requirements.txt
 ```
 
-## Run
+## Run Locally
 
-Start the app with `uvicorn`:
+Start the app with Uvicorn:
 
 ```bash
-uvicorn asgi:app --reload --host 0.0.0.0
+uvicorn asgi:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The app will be available at:
+App URLs:
 
-- `http://127.0.0.1:8000`
+- App: `http://127.0.0.1:8000`
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - Chat UI: `http://127.0.0.1:8000/chat`
 
 ## Local Model
 
-Both `POST /ask` and `WS /ws/chat` expect a local OpenAI-compatible model endpoint to be running.
+`POST /ask` and `WS /ws/chat` expect a local OpenAI-compatible model endpoint.
 
-Current setup:
+Current host setup:
 
 ```bash
-~/llama.cpp/build/bin/llama-server -m Qwen_Qwen3-14B-Q4_K_M.gguf --port 8080
+~/llama.cpp/build/bin/llama-server -m Qwen_Qwen3-14B-Q4_K_M.gguf --host 0.0.0.0 --port 8080
 ```
 
-Current `GenerationService` target:
+Current generation target:
 
-- `http://127.0.0.1:8080/v1/chat/completions`
+- Base URL: `http://127.0.0.1:8080/v1`
+- Endpoint: `/chat/completions`
+- Combined target: `http://127.0.0.1:8080/v1/chat/completions`
+
+## Runtime Data
+
+The app stores local runtime data in:
+
+- `app.db`
+- `uploads/`
+- `qdrant_data/`
+
+If you want a fresh local reset, those are the main paths to clear.
 
 ## Current Flow
 
 1. Upload a document
 2. Extract text
 3. Chunk the text
-4. Embed the chunks into Qdrant
-5. Run semantic search across all indexed documents
-6. Ask a question against the indexed corpus
-7. Stream an answer in the browser over WebSocket
-8. Optionally upload and index in the background with job polling
+4. Index chunks into lexical and vector stores
+5. Search across the indexed corpus
+6. Ask a question over HTTP or WebSocket
+7. Optionally index in the background with job polling
 
-There are three upload flows available:
+There are three upload flows:
 
 - `POST /upload_v1`
   - upload only
 - `POST /upload_v2`
-  - upload, extract, chunk, and embed in a single request
+  - upload, extract, chunk, and embed in one request
 - `POST /upload_async`
-  - upload a document, create a background indexing job, and return a queued job response immediately
-
-Supported upload types right now:
-
-- `.txt`
-- `.pdf`
+  - upload, create a background indexing job, and return immediately
 
 ## API Endpoints
 
@@ -94,13 +103,29 @@ Supported upload types right now:
 - `POST /{document_id}/embed`
   - embed and index one document into Qdrant
 - `POST /semantic-search`
-  - corpus-wide semantic search across all embedded documents
+  - corpus-wide dense retrieval
+- `POST /hybrid-search`
+  - corpus-wide hybrid retrieval using dense + lexical fusion
 - `POST /ask`
   - retrieve relevant chunks and generate one non-streaming answer from the indexed corpus
 - `GET /jobs/{job_id}`
   - fetch the current status of a background indexing job
 - `WS /ws/chat`
   - retrieve relevant chunks and stream answer tokens to the chat UI
+
+## Retrieval Modes
+
+The repo currently has three retrieval styles:
+
+- document-scoped keyword search via `POST /{document_id}/search`
+- dense corpus retrieval via `POST /semantic-search`
+- hybrid corpus retrieval via `POST /hybrid-search`
+
+Hybrid retrieval combines:
+
+- dense vector retrieval from Qdrant
+- lexical retrieval from SQLite FTS5
+- reciprocal rank fusion (RRF)
 
 ## Background Job Flow
 
@@ -134,49 +159,54 @@ Current job statuses:
 - `completed`
 - `failed`
 
-## Chat Flow
+## Ask And Chat Responses
 
-The browser chat page at `GET /chat` opens a websocket connection to `WS /ws/chat`.
+`POST /ask` returns:
 
-Client messages:
+- `answer`
+- `match_count`
+- `sources`
+- `citations`
+
+Current citations are model-attributed inline citations backed by the retrieved source list.
+
+The browser chat page at `GET /chat` opens a WebSocket connection to `WS /ws/chat`.
+
+Client message example:
 
 ```json
 {"query":"what is retrieval augmented generation","limit":3}
 ```
 
-Server events:
+Server event examples:
 
 ```json
 {"type":"status","message":"retrieving context"}
 {"type":"status","message":"generating answer"}
 {"type":"token","value":"Retrieval "}
-{"type":"done","answer":"Retrieval augmented generation...","sources":[...]}
+{"type":"done","answer":"Retrieval augmented generation...[1]","sources":[...],"citations":[...]}
 {"type":"error","message":"Generation service is unavailable"}
 ```
 
-`POST /ask` is still available for the non-streaming request/response flow and is useful for Swagger testing.
+`POST /ask` is still useful for non-streaming request/response testing in Swagger.
 
 ## Example Manual Workflow
 
-### One-step upload and indexing
-
-Upload, extract, chunk, and embed in one request:
+### One-Step Upload And Indexing
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/upload_v2" \
   -F "file=@tests/fixtures/python_rag_intro.txt;type=text/plain"
 ```
 
-### Step-by-step upload flow
-
-Upload a file only:
+### Step-By-Step Upload Flow
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/upload_v1" \
   -F "file=@tests/fixtures/python_rag_intro.txt;type=text/plain"
 ```
 
-Then use the returned `document_id` in the next steps:
+Then use the returned `document_id`:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/<document_id>/extract"
@@ -184,7 +214,23 @@ curl -X POST "http://127.0.0.1:8000/<document_id>/chunk"
 curl -X POST "http://127.0.0.1:8000/<document_id>/embed"
 ```
 
-### Ask a question over HTTP
+### Dense Search
+
+```bash
+curl -X POST "http://127.0.0.1:8000/semantic-search" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"what is retrieval augmented generation","limit":3}'
+```
+
+### Hybrid Search
+
+```bash
+curl -X POST "http://127.0.0.1:8000/hybrid-search" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"what is retrieval augmented generation","limit":3}'
+```
+
+### Ask A Question Over HTTP
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/ask" \
@@ -192,7 +238,7 @@ curl -X POST "http://127.0.0.1:8000/ask" \
   -d '{"query":"what is retrieval augmented generation","limit":3}'
 ```
 
-### Upload and index in the background
+### Upload And Index In The Background
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/upload_async" \
@@ -205,7 +251,7 @@ Then poll the returned `job_id`:
 curl "http://127.0.0.1:8000/jobs/<job_id>"
 ```
 
-### Open the chat UI
+### Open The Chat UI
 
 Visit:
 
@@ -213,7 +259,7 @@ Visit:
 http://127.0.0.1:8000/chat
 ```
 
-The UI will connect to `WS /ws/chat` automatically and stream the answer into the assistant bubble.
+The UI connects to `WS /ws/chat` automatically and streams the answer into the assistant bubble.
 
 ## Tests
 
@@ -232,9 +278,48 @@ Current coverage includes:
 - websocket no-context path
 - websocket generation-error path
 
+## Docker
+
+Build the image:
+
+```bash
+docker build -t document-upload-app .
+```
+
+Verify the image:
+
+```bash
+docker images document-upload-app
+```
+
+Run the app container directly:
+
+```bash
+docker run --rm \
+  --name document-upload-app \
+  -p 8000:8000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e GENERATION_BASE_URL=http://host.docker.internal:8080/v1 \
+  -v "$(pwd)/app.db:/app/app.db" \
+  -v "$(pwd)/uploads:/app/uploads" \
+  -v "$(pwd)/qdrant_data:/app/qdrant_data" \
+  document-upload-app
+```
+
+Run with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Current Docker assumptions:
+
+- only the FastAPI application is containerized
+- `llama-server` stays on the host machine
+- host `llama-server` must be reachable from Docker
+- for Linux host access, `host.docker.internal` is mapped through `host-gateway`
 
 ## TODOs:
-6. logging + latency metrics (1/2 session)
-7. Docker Compose (1/2 session)
+7. Docker Compose (1 session)
 8. RAG eval tests (1 session)
 9. breakdown main.py more (ask.py, health.py...) (1/2 session)
